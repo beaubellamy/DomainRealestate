@@ -1,7 +1,9 @@
-import json
+import json, csv
+from pandas.io.json import json_normalize
 import requests
 import re, string, timeit
 import time
+import queue
 from credentials import credentials
 
 '''
@@ -27,7 +29,7 @@ def get_access_token(client_id=None, client_secret=None):
     return token["access_token"]
 
 
-def find_price_range(access_token, property_id, UpperBoundPrice, lowerBoundPrice, increment):
+def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
     """
     Find the price range of a property listing
     access_token: Must be a valid access token for the project.
@@ -236,13 +238,20 @@ def search_builder(listingType='Sale',
         'page': page,
         'pageSize': pageSize,
         #'geoWindow':None
+        'sort': {'sortKey': 'Price',
+                 'direction': 'Ascending'}
         }
     
+
+
     # Build the search parameters with the locations
     SearchParameters = []
+    SearchQueue = queue.Queue()
     for suburb in locations.keys():
         searchFrom['locations'] = [locations[suburb]]
         SearchParameters.append(searchFrom.copy())
+        SearchQueue.put(searchFrom.copy())
+
     
     # The price range can be adusted later, to reduce the number of listings returned (max 1000 per search)
     ''' 
@@ -251,8 +260,7 @@ def search_builder(listingType='Sale',
     is included in the search, this limits the number of ranges that will be required to search through.
     '''
 
-
-    return SearchParameters
+    return SearchParameters, SearchQueue
 
 
 def build_search_locations(suburbs=['Balgowlah']):
@@ -292,6 +300,15 @@ def build_search_locations(suburbs=['Balgowlah']):
         
     return searchLocations
 
+
+def extract_price(lastPrice):
+    priceDetails = lastPrice.replace('$','').replace(',','').replace('+','').replace('s','').split()
+    for item in priceDetails:
+        if item.isdigit():
+            price = int(int(item)/100000)*100000
+            break
+        
+    return price
 
 def get_search_parameters(maxPageSize=100):
     """
@@ -334,41 +351,48 @@ if __name__ == '__main__':
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
 
     maxPageSize = 200
-    maxPages = 5    # Maximum of 100 records per search
+    maxPages = 5
+    #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
 
-    #search_list = get_search_parameters(maxPageSize) # Original testing function
     suburbs = ['Balgowlah', 'Westmead', 'Crestmead']
+    #suburbs = ['Balgowlah']
     locations = build_search_locations(suburbs)
-    search_list = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
+    searchList, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
                                  minPrice=None, maxPrice=None, locations=locations, page=1, pageSize=200)
-    
+    # Todo: Sale response gets different keys, but maybe the property id is the same. So 
+    # the property id can be used to check for sold price
+
     listings = []
     length = -1
-    for search in search_list:
+
+    while searchQueue.qsize() > 0:
+        search = searchQueue.get()
         listings.extend(search_domain(access_token, search))
      
         # Check if new listings can be added
         search['page'] += 1 
         new_listings = search_domain(access_token, search)
 
-        while new_listings and search['page'] <= maxPages:
+        while new_listings and search['page'] < maxPages:
             listings.extend(new_listings)
             search['page'] += 1
             new_listings = search_domain(access_token, search)
-        
+ 
+        listings.extend(new_listings)
+    
+        if ((len(new_listings) > 0) & (search['page'] >= maxPages)):
+            lastPrice = new_listings[-1]['listing']['priceDetails']['displayPrice']
+            new_minPrice = extract_price(lastPrice)
+            search['minPrice'] = new_minPrice
+            search['page'] = 1
+            searchQueue.put(search.copy())
 
-            
+    print ('while complete')
 
-        print (search)
-
-
-    print (len(listings))
-    #find_price_range(access_token, '2015776623', 1700000, 1500000, 5000)
-
-
-
-
-
+    df = json_normalize(listings)
+    df = df.drop_duplicates(subset='listing.id')
+    df.to_csv('C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\test.csv')
+    
 
 
 
