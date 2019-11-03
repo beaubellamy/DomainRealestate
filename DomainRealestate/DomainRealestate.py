@@ -1,4 +1,5 @@
-import json, csv
+#import json, csv
+import pandas as pd
 from pandas.io.json import json_normalize
 import requests
 import re, string, timeit
@@ -182,11 +183,20 @@ def search_domain(access_token, search_parameters):
     """
     Return a list of all the listings that are relevant to the search parameters.
     """
+    
+    time.sleep(5)
 
     url = "https://api.domain.com.au/v1/listings/residential/_search"
     auth = {"Authorization":"Bearer "+access_token}
     request = requests.post(url, json=search_parameters, headers=auth)
     
+    if request.status_code == 429:
+        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        print (f'Waiting approx {request.headers["Retry-After"]} sec for the next attmept.')
+        
+        time.sleep(float(request.headers['Retry-After'])*1.05)
+        request = requests.post(url, json=search_parameters, headers=auth)
+
     if request.status_code != 200:
         raise Exception(request.json()['errors'], request.json()['message'])
 
@@ -268,36 +278,77 @@ def build_search_locations(suburbs=['Balgowlah']):
     build the location parameters for the search parameters
     """
     
-    locationLibrary = {
-        'Balgowlah': {'state': 'NSW',
-                        'suburb': 'Balgowlah', 
-                        'postcode': 2093,
-                        'includeSurroundingSuburbs': True
-                        },
-        'Westmead':  {'state': 'NSW', 
-                        'suburb': 'Westmead', 
-                        'postcode': 2145,
-                        'includeSurroundingSuburbs': True
-                        },
-        'Crestmead': {'state': 'QLD', 
-                        'suburb': 'Crestmead', 
-                        'postcode': 4132,
-                        'includeSurroundingSuburbs': True
-                        },
-        'Spare':     {'state': 'NSW', 
-                        'suburb': 'spare', 
-                        'postcode': 9999,
-                        'includeSurroundingSuburbs': True
-                        }
-        }
+    #locationLibrary = {
+    #    'Balgowlah': {'state': 'NSW',
+    #                    'suburb': 'Balgowlah', 
+    #                    'postcode': 2093,
+    #                    'includeSurroundingSuburbs': True
+    #                    },
+    #    'Westmead':  {'state': 'NSW', 
+    #                    'suburb': 'Westmead', 
+    #                    'postcode': 2145,
+    #                    'includeSurroundingSuburbs': True
+    #                    },
+    #    'Crestmead': {'state': 'QLD', 
+    #                    'suburb': 'Crestmead', 
+    #                    'postcode': 4132,
+    #                    'includeSurroundingSuburbs': True
+    #                    },
+    #    'Dee Why': {'state': 'NSW',
+    #                    'suburb': 'Dee Why', 
+    #                    'postcode': 2099,
+    #                    'includeSurroundingSuburbs': True
+    #                    },
+    #    'Narrabeen': {'state': 'NSW',
+    #                    'suburb': 'Narrabeen', 
+    #                    'postcode': 2101,
+    #                    'includeSurroundingSuburbs': True
+    #                    },
+    #    'Spare':     {'state': 'NSW', 
+    #                    'suburb': 'spare', 
+    #                    'postcode': 9999,
+    #                    'includeSurroundingSuburbs': True
+    #                    }
+    #    }
         
+    #searchLocations = {}
+    #for suburb in suburbs:
+    #    if suburb in locationLibrary.keys():
+    #        searchLocations[suburb] = locationLibrary[suburb]
+    #    else:
+    #        print (f'{suburb} is not in the location library.')
+
+
+    postcodes = pd.read_csv('C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\postcodes.csv')
+    
+    if 'NSW' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'NSW']
+    if 'QLD' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'QLD']
+    if 'SA' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'SA']
+    if 'NT' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'NT']
+    if 'ACT' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'ACT']
+    if 'WA' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'WA']
+    if 'TAS' in suburbs:
+        postcodes = postcodes[postcodes['State'] == 'TAS']
+
+    if set(suburbs).issubset(['All', 'NSW', 'QLD', 'SA', 'NT', 'ACT', 'WA', 'TAS']):
+        suburbs = postcodes['Suburb']
+
+
     searchLocations = {}
     for suburb in suburbs:
-        if suburb in locationLibrary.keys():
-            searchLocations[suburb] = locationLibrary[suburb]
-        else:
-            print (f'{suburb} is not in the location library.')
-        
+        location_df = postcodes[postcodes['Suburb'] == suburb]
+        location = {'state': location_df['State'].values[0], 
+                    'suburb': location_df['Suburb'].values[0], 
+                    'postcode': location_df['Postcode'].values[0],
+                    'includeSurroundingSuburbs': True}
+        searchLocations[suburb] = location
+
     return searchLocations
 
 
@@ -310,52 +361,32 @@ def extract_price(lastPrice):
         
     return price
 
-def get_search_parameters(maxPageSize=100):
-    """
-    Set up the search parameters (Originally used for testing).
-    """
-
-    # For a list of possible search parameters and their values:
-    # https://developer.domain.com.au/docs/apis/pkg_agents_listings/references/listings_detailedresidentialsearch
- 
-    search_parameters = [
-        {"listingType": "Sale", 
-         "page": 1,
-         "pageSize": maxPageSize,
-         "locations": [ 
-             {"state": "NSW", 
-              "suburb": "Balgowlah", 
-              "postcode": 2093,
-              "includeSurroundingSuburbs": True
-              } ]
-            },
-        {"listingType": "Sale", 
-         "page": 1,
-         "pageSize": maxPageSize,
-         "locations": [ 
-             {"state": "NSW", 
-              "suburb": "Westmead", 
-              "postcode": 2145,
-              "includeSurroundingSuburbs": True
-              } ]
-         } ]
-        
-
-    return search_parameters
-
 
 if __name__ == '__main__':
+    
     
     client_id = credentials['client_id']
     client_secret = credentials['client_secret']
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
+       
+    # Read the bikeSales csv file, if it exists
+    filename = 'C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\test.csv'
+    try:
+        df = pd.read_csv(filename, sep=',')
+        df.drop(['Unnamed: 0'], axis=1, inplace=True)
+        #listingIDs = df['listing.id']
+
+        
+    except FileNotFoundError:
+        df = pd.DataFrame()
 
     maxPageSize = 200
     maxPages = 5
     #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
 
-    suburbs = ['Balgowlah', 'Westmead', 'Crestmead']
-    #suburbs = ['Balgowlah']
+    suburbs = ['Balgowlah', 'Westmead', 'Crestmead', 'Dee Why', 'Narrabeen']
+    suburbs = ['NSW']
+
     locations = build_search_locations(suburbs)
     searchList, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
                                  minPrice=None, maxPrice=None, locations=locations, page=1, pageSize=200)
@@ -387,11 +418,11 @@ if __name__ == '__main__':
             search['page'] = 1
             searchQueue.put(search.copy())
 
-    print ('while complete')
 
-    df = json_normalize(listings)
-    df = df.drop_duplicates(subset='listing.id')
-    df.to_csv('C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\test.csv')
+    listing_df = json_normalize(listings)
+    listing_df = df.append(listing_df)
+    listing_df = listing_df.drop_duplicates(subset='listing.id')
+    listing_df.to_csv(filename)
     
 
 
