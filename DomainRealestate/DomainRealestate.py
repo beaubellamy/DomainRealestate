@@ -1,9 +1,11 @@
 #import json, csv
+import os
 import pandas as pd
 from pandas.io.json import json_normalize
 import requests
 import re, string, timeit
 import time
+import datetime
 import queue
 from credentials import credentials
 
@@ -27,7 +29,14 @@ def get_access_token(client_id=None, client_secret=None):
                                      "scope":"api_listings_read api_listings_write",
                                      "Content-Type":"text/json"})
     token=response.json()
-    return token["access_token"]
+    expire = datetime.datetime.now() + datetime.timedelta(seconds=token['expires_in'])
+    print (f'token expires at {expire}')
+
+    access_token = {}
+    access_token['access_token'] = token['access_token']
+    access_token['expire_at'] = expire
+
+    return access_token
 
 
 def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
@@ -179,23 +188,42 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
     print("URL:",details['seoUrl'])
 
 
-def search_domain(access_token, search_parameters):
+def search_domain(token, search_parameters):
     """
     Return a list of all the listings that are relevant to the search parameters.
     """
-    
-    time.sleep(5)
+    access_token = token['access_token']
+    time.sleep(60)
 
     url = "https://api.domain.com.au/v1/listings/residential/_search"
+    if datetime.datetime.now() > token['expire_at']:
+        token = get_access_token(client_id=client_id, client_secret=client_secret)
+        access_token = token['access_token']
+    
     auth = {"Authorization":"Bearer "+access_token}
     request = requests.post(url, json=search_parameters, headers=auth)
+    #remaining_post = request.headers['X-RateLimit-Remaining']
     
     if request.status_code == 429:
+        retry_time = datetime.datetime.now() + datetime.timedelta(seconds=float(request.headers["Retry-After"]))
         print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
-        print (f'Waiting approx {request.headers["Retry-After"]} sec for the next attmept.')
-        
-        time.sleep(float(request.headers['Retry-After'])*1.05)
+        print (f'Will re-try at approx {retry_time}.')
+        print (f'Access token expires at {token["expire_at"]}')
+
+        time.sleep(float(request.headers['Retry-After'])*1.01)
+        print (access_token)
+
+        # Get a new token
+        token = get_access_token(client_id=client_id, client_secret=client_secret)
+        access_token = token['access_token']
+
+        auth = {"Authorization":"Bearer "+access_token}
         request = requests.post(url, json=search_parameters, headers=auth)
+        print (token['access_token'])
+
+        if request.status_code != 200:
+            raise Exception(request.json()['errors'], request.json()['message'], 
+                            'Raised after getting a new access token')
 
     if request.status_code != 200:
         raise Exception(request.json()['errors'], request.json()['message'])
@@ -277,49 +305,9 @@ def build_search_locations(suburbs=['Balgowlah']):
     """
     build the location parameters for the search parameters
     """
-    
-    #locationLibrary = {
-    #    'Balgowlah': {'state': 'NSW',
-    #                    'suburb': 'Balgowlah', 
-    #                    'postcode': 2093,
-    #                    'includeSurroundingSuburbs': True
-    #                    },
-    #    'Westmead':  {'state': 'NSW', 
-    #                    'suburb': 'Westmead', 
-    #                    'postcode': 2145,
-    #                    'includeSurroundingSuburbs': True
-    #                    },
-    #    'Crestmead': {'state': 'QLD', 
-    #                    'suburb': 'Crestmead', 
-    #                    'postcode': 4132,
-    #                    'includeSurroundingSuburbs': True
-    #                    },
-    #    'Dee Why': {'state': 'NSW',
-    #                    'suburb': 'Dee Why', 
-    #                    'postcode': 2099,
-    #                    'includeSurroundingSuburbs': True
-    #                    },
-    #    'Narrabeen': {'state': 'NSW',
-    #                    'suburb': 'Narrabeen', 
-    #                    'postcode': 2101,
-    #                    'includeSurroundingSuburbs': True
-    #                    },
-    #    'Spare':     {'state': 'NSW', 
-    #                    'suburb': 'spare', 
-    #                    'postcode': 9999,
-    #                    'includeSurroundingSuburbs': True
-    #                    }
-    #    }
-        
-    #searchLocations = {}
-    #for suburb in suburbs:
-    #    if suburb in locationLibrary.keys():
-    #        searchLocations[suburb] = locationLibrary[suburb]
-    #    else:
-    #        print (f'{suburb} is not in the location library.')
 
-
-    postcodes = pd.read_csv('C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\postcodes.csv')
+    postcode_file = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'postcodes.csv')
+    postcodes = pd.read_csv(postcode_file)
     
     if 'NSW' in suburbs:
         postcodes = postcodes[postcodes['State'] == 'NSW']
@@ -339,7 +327,6 @@ def build_search_locations(suburbs=['Balgowlah']):
     if set(suburbs).issubset(['All', 'NSW', 'QLD', 'SA', 'NT', 'ACT', 'WA', 'TAS']):
         suburbs = postcodes['Suburb']
 
-
     searchLocations = {}
     for suburb in suburbs:
         location_df = postcodes[postcodes['Suburb'] == suburb]
@@ -353,6 +340,7 @@ def build_search_locations(suburbs=['Balgowlah']):
 
 
 def extract_price(lastPrice):
+    price = 0
     priceDetails = lastPrice.replace('$','').replace(',','').replace('+','').replace('s','').split()
     for item in priceDetails:
         if item.isdigit():
@@ -370,16 +358,16 @@ if __name__ == '__main__':
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
        
     # Read the bikeSales csv file, if it exists
-    filename = 'C:\\Users\\Beau\\Documents\\DataScience\\DomainRealestate\\test.csv'
+    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'test.csv')
     try:
         df = pd.read_csv(filename, sep=',')
         df.drop(['Unnamed: 0'], axis=1, inplace=True)
         #listingIDs = df['listing.id']
-
         
     except FileNotFoundError:
         df = pd.DataFrame()
 
+    # Limits of the post request enforced by Domain.com.au
     maxPageSize = 200
     maxPages = 5
     #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
