@@ -201,9 +201,27 @@ def search_domain(token, search_parameters):
         access_token = token['access_token']
     
     auth = {"Authorization":"Bearer "+access_token}
-    request = requests.post(url, json=search_parameters, headers=auth)
-    #remaining_post = request.headers['X-RateLimit-Remaining']
-    
+    #request = requests.post(url, json=search_parameters, headers=auth)
+    while True:
+        try:
+            request = requests.post(url, json=search_parameters, headers=auth)
+        except requests.exceptions.Timeout:
+            # Maybe set up for a retry, or continue in a retry loop
+            time.sleep(60)
+            request = requests.post(url, json=search_parameters, headers=auth)
+        except requests.exceptions.TooManyRedirects as e:
+            # Tell the user their URL was bad and try a different one
+            print (f'Too many redirects: {e}')
+            break
+        except requests.exceptions.RequestException as e:
+            # catastrophic error. bail.
+            now = datetime.datetime.now()
+            print (f'{now}: Request Exception: {e}')
+            print (f'Token expires: {token["expire_at"]}')
+            time.sleep(60)
+            request = requests.post(url, json=search_parameters, headers=auth)
+        break
+
     if request.status_code == 429:
         retry_time = datetime.datetime.now() + datetime.timedelta(seconds=float(request.headers["Retry-After"]))
         print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
@@ -226,9 +244,11 @@ def search_domain(token, search_parameters):
                             'Raised after getting a new access token')
 
     if request.status_code != 200:
+        # status code: 500
         raise Exception(request.json()['errors'], request.json()['message'])
 
-    return request.json()
+    return token, request.json(), int(request.headers['X-RateLimit-Remaining'])
+    
 
 
 def search_builder(listingType='Sale',
@@ -358,7 +378,7 @@ if __name__ == '__main__':
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
        
     # Read the bikeSales csv file, if it exists
-    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'test.csv')
+    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'local.csv')
     try:
         df = pd.read_csv(filename, sep=',')
         df.drop(['Unnamed: 0'], axis=1, inplace=True)
@@ -372,8 +392,8 @@ if __name__ == '__main__':
     maxPages = 5
     #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
 
-    suburbs = ['Balgowlah', 'Westmead', 'Crestmead', 'Dee Why', 'Narrabeen']
-    suburbs = ['NSW']
+    suburbs = ['Balgowlah', 'Cremorne']
+    #suburbs = ['NSW']
 
     locations = build_search_locations(suburbs)
     searchList, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
@@ -386,16 +406,17 @@ if __name__ == '__main__':
 
     while searchQueue.qsize() > 0:
         search = searchQueue.get()
-        listings.extend(search_domain(access_token, search))
+        access_token, search_results, remaining_calls = search_domain(access_token, search)
+        listings.extend(search_results)
      
         # Check if new listings can be added
         search['page'] += 1 
-        new_listings = search_domain(access_token, search)
+        access_token, new_listings, remaining_calls = search_domain(access_token, search)
 
         while new_listings and search['page'] < maxPages:
             listings.extend(new_listings)
             search['page'] += 1
-            new_listings = search_domain(access_token, search)
+            access_token, new_listings, remaining_calls = search_domain(access_token, search)
  
         listings.extend(new_listings)
     
@@ -406,6 +427,11 @@ if __name__ == '__main__':
             search['page'] = 1
             searchQueue.put(search.copy())
 
+        if remaining_calls <= 5:
+            listing_df = json_normalize(listings)
+            listing_df = df.append(listing_df)
+            listing_df = listing_df.drop_duplicates(subset='listing.id')
+            listing_df.to_csv(filename)
 
     listing_df = json_normalize(listings)
     listing_df = df.append(listing_df)
