@@ -5,7 +5,7 @@ from pandas.io.json import json_normalize
 import requests
 import re, string, timeit
 import time
-import datetime
+from datetime import datetime, timedelta
 import queue
 from credentials import credentials
 
@@ -29,7 +29,7 @@ def get_access_token(client_id=None, client_secret=None):
                                      "scope":"api_listings_read api_listings_write",
                                      "Content-Type":"text/json"})
     token=response.json()
-    expire = datetime.datetime.now() + datetime.timedelta(seconds=token['expires_in'])
+    expire = datetime.now() + timedelta(seconds=token['expires_in'])
     print (f'token expires at {expire}')
 
     access_token = {}
@@ -196,7 +196,7 @@ def search_domain(token, search_parameters):
     time.sleep(60)
 
     url = "https://api.domain.com.au/v1/listings/residential/_search"
-    if datetime.datetime.now() > token['expire_at']:
+    if datetime.now() > token['expire_at']:
         token = get_access_token(client_id=client_id, client_secret=client_secret)
         access_token = token['access_token']
     
@@ -215,7 +215,7 @@ def search_domain(token, search_parameters):
             break
         except requests.exceptions.RequestException as e:
             # catastrophic error. bail.
-            now = datetime.datetime.now()
+            now = datetime.now()
             print (f'{now}: Request Exception: {e}')
             print (f'Token expires: {token["expire_at"]}')
             time.sleep(60)
@@ -223,7 +223,7 @@ def search_domain(token, search_parameters):
         break
 
     if request.status_code == 429:
-        retry_time = datetime.datetime.now() + datetime.timedelta(seconds=float(request.headers["Retry-After"]))
+        retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
         print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
         print (f'Will re-try at approx {retry_time}.')
         print (f'Access token expires at {token["expire_at"]}')
@@ -350,11 +350,15 @@ def build_search_locations(suburbs=['Balgowlah']):
     searchLocations = {}
     for suburb in suburbs:
         location_df = postcodes[postcodes['Suburb'] == suburb]
-        location = {'state': location_df['State'].values[0], 
-                    'suburb': location_df['Suburb'].values[0], 
-                    'postcode': location_df['Postcode'].values[0],
-                    'includeSurroundingSuburbs': True}
-        searchLocations[suburb] = location
+
+        if location_df.shape[0] > 0:
+            location = {'state': location_df['State'].values[0], 
+                        'suburb': location_df['Suburb'].values[0], 
+                        'postcode': location_df['Postcode'].values[0],
+                        'includeSurroundingSuburbs': True}
+            searchLocations[suburb] = location
+        else:
+            print (f'{suburb} is not in the list.')
 
     return searchLocations
 
@@ -370,19 +374,52 @@ def extract_price(lastPrice):
     return price
 
 
-if __name__ == '__main__':
+def add_dates(listings, df):
+
+
+    listing_df = json_normalize(listings)
+    # check if listing_df ids are already in df
+    # the ones that are, update the last seen
+    # the ones that aren't create first seen and last seen
+
+    if df.shape[0] > 0:
+        new_listings = listing_df['listing.id']
+        mask = df['listing.id'].isin(new_listings)
+        # update the dates already in df
+        df['last_seen'].loc[mask] = datetime.utcnow().date().strftime('%d/%m/%Y')
     
+  
+    #existing_listing = df['listing.id'].unique()
+    #mask = listing_df['listing.id'].isin(existing_listing)
+    listing_df['first_seen'] = datetime.utcnow().date().strftime('%d/%m/%Y')
+    listing_df['last_seen'] = datetime.utcnow().date().strftime('%d/%m/%Y')
+    #listing_df = listing_df[~mask]
+
+
+
+    #Need to change 'date' to 'last seen'
+    #df[mask]['last_seen'] = datetime.utcnow().date()
+
+    listing_df = df.append(listing_df)
+    #sort the listings by date, so the last one is most recent
+    listing_df = listing_df.sort_values(by=['last_seen'])
+    listing_df = listing_df.drop_duplicates(subset='listing.id') # keep the last one
+
+    return listing_df
+
+
+if __name__ == '__main__':
+
     
     client_id = credentials['client_id']
     client_secret = credentials['client_secret']
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
        
-    # Read the bikeSales csv file, if it exists
-    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'local.csv')
+    # Read the realestate file, if it exists
+    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'local_listings.csv')
     try:
         df = pd.read_csv(filename, sep=',')
         df.drop(['Unnamed: 0'], axis=1, inplace=True)
-        #listingIDs = df['listing.id']
         
     except FileNotFoundError:
         df = pd.DataFrame()
@@ -392,19 +429,21 @@ if __name__ == '__main__':
     maxPages = 5
     #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
 
-    suburbs = ['Balgowlah', 'Cremorne']
+    suburbs = ['Balgowlah', 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
     #suburbs = ['NSW']
 
     locations = build_search_locations(suburbs)
-    searchList, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
+    searchParameters, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
                                  minPrice=None, maxPrice=None, locations=locations, page=1, pageSize=200)
     # Todo: Sale response gets different keys, but maybe the property id is the same. So 
     # the property id can be used to check for sold price
+    # Todo: Add dates and track when all listing were initially seen and last seen.
 
     listings = []
     length = -1
 
     while searchQueue.qsize() > 0:
+        print(f'Searching queue {searchQueue.qsize()}...')
         search = searchQueue.get()
         access_token, search_results, remaining_calls = search_domain(access_token, search)
         listings.extend(search_results)
@@ -414,6 +453,7 @@ if __name__ == '__main__':
         access_token, new_listings, remaining_calls = search_domain(access_token, search)
 
         while new_listings and search['page'] < maxPages:
+            print (f'page: {search["page"]}')
             listings.extend(new_listings)
             search['page'] += 1
             access_token, new_listings, remaining_calls = search_domain(access_token, search)
@@ -428,14 +468,12 @@ if __name__ == '__main__':
             searchQueue.put(search.copy())
 
         if remaining_calls <= 5:
-            listing_df = json_normalize(listings)
-            listing_df = df.append(listing_df)
-            listing_df = listing_df.drop_duplicates(subset='listing.id')
+            # Update the dates and save to file if we are getting close to the call limit
+            listing_df =  add_dates(listings, df)
             listing_df.to_csv(filename)
 
-    listing_df = json_normalize(listings)
-    listing_df = df.append(listing_df)
-    listing_df = listing_df.drop_duplicates(subset='listing.id')
+    # Update the dates and save to file
+    listing_df =  add_dates(listings, df)
     listing_df.to_csv(filename)
     
 
