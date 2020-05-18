@@ -39,7 +39,7 @@ def get_access_token(client_id=None, client_secret=None):
     return access_token
 
 
-def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
+def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
     """
     Find the price range of a property listing
     access_token: Must be a valid access token for the project.
@@ -49,12 +49,18 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
     # Function prints the property details and whether each price guess has the property listed.
 
     # Get the property details
-    url = "https://api.domain.com.au/v1/listings/"+property_id
-    auth = {"Authorization":"Bearer "+access_token}
+    url = "https://api.domain.com.au/v1/listings/"+str(int(property_id))
+    auth = {"Authorization":"Bearer "+token['access_token']}
     request = requests.get(url,headers=auth)
     details=request.json()
 
-    # get the property details
+    if details['status'] == 'sold':
+        date = details['saleDetails']['soldDetails']['soldDate']
+        price = details['saleDetails']['soldDetails']['soldPrice']
+
+        return price, price, price
+
+    # Get the property details
     address=details['addressParts']
     postcode=address['postcode']
     suburb=address['suburb']
@@ -65,7 +71,8 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
     print(f'Property: {property_type} \nAddress: {suburb}, {postcode} \n'
           f'Bedrooms:{str(bedrooms)}, \nBathrooms:{str(bathrooms)},  \nCarspace:{str(carspaces)}')
 
-    # the below puts all relevant property types into a single string. eg. a property listing can be a 'house' and a 'townhouse'
+    # The below puts all relevant property types into a single string. eg. a property listing 
+    # can be a 'house' and a 'townhouse'
     n=0
     property_type_str=""
     for p in details['propertyTypes']:
@@ -107,7 +114,7 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
         listings = []
         for listing in l:
             listings.append(listing["listing"]["id"])
-        listings
+        
 
         if int(property_id) in listings:
             max_price=max_price-increment
@@ -118,6 +125,9 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
             print("Not found. Increasing max price to ",max_price)
             time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly   
 
+        if max_price >= UpperBoundPrice:
+            upper = 2
+            break
 
     searching_for_price=True
     if UpperBoundPrice>0:
@@ -166,15 +176,10 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
             print("Not found. Decreasing min price to ",min_price)
             time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly     
        
-    if max_price<1000000:
-        lower=max_price/1000
-        upper=min_price/1000
-        denom="K"
-    else: 
-        lower=max_price/1000000
-        upper=min_price/1000000
-        denom="M"
-
+        if min_price <= lowerBoundPrice:
+            lower = 1
+            break
+    
     # Print the results
     print(address['displayAddress'])
     print(details['headline'])
@@ -182,10 +187,14 @@ def find_price_range(access_token, property_id, lowerBoundPrice, UpperBoundPrice
     print("Details: ",int(bedrooms),"bedroom,",int(bathrooms),"bathroom,",int(carspaces),"carspace")
     print("Display price:",details['priceDetails']['displayPrice'])      
     if max_price==min_price:
-        print("Price guide:","$",lower,denom)
+        print("Price guide:","$",lower)
     else:
-        print("Price range:","$",lower,"-","$",upper,denom)
+        print("Price range:","$",lower,"-","$",upper)
     print("URL:",details['seoUrl'])
+
+    middle_price = min_price + (max_price-min_price)/2
+
+    return min_price, max_price, middle_price
 
 
 def search_domain(token, search_parameters):
@@ -201,20 +210,20 @@ def search_domain(token, search_parameters):
         access_token = token['access_token']
     
     auth = {"Authorization":"Bearer "+access_token}
-    #request = requests.post(url, json=search_parameters, headers=auth)
+
     while True:
         try:
             request = requests.post(url, json=search_parameters, headers=auth)
         except requests.exceptions.Timeout:
-            # Maybe set up for a retry, or continue in a retry loop
+            # if timed out, try again later.
             time.sleep(60)
             request = requests.post(url, json=search_parameters, headers=auth)
         except requests.exceptions.TooManyRedirects as e:
-            # Tell the user their URL was bad and try a different one
+            # The URL is wrong.
             print (f'Too many redirects: {e}')
             break
         except requests.exceptions.RequestException as e:
-            # catastrophic error. bail.
+            # Request failed, try again later.
             now = datetime.now()
             print (f'{now}: Request Exception: {e}')
             print (f'Token expires: {token["expire_at"]}')
@@ -222,7 +231,9 @@ def search_domain(token, search_parameters):
             request = requests.post(url, json=search_parameters, headers=auth)
         break
 
+    # Test for specific status codes
     if request.status_code == 429:
+        # Rate limit has been reached.
         retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
         print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
         print (f'Will re-try at approx {retry_time}.')
@@ -261,10 +272,9 @@ def search_builder(listingType='Sale',
     """
     Build the search parameters list.
     """
-
     
     assert listingType in ['Sale', 'Rent', 'Share', 'Sold', 'NewHomes'], \
-        f'listingType must be on ene of [Sale, Rent, Share, Sold, NewHomes]'
+        'listingType must be on ene of [Sale, Rent, Share, Sold, NewHomes]'
     
     # Prepare the search parameters
     searchFrom = {
@@ -300,8 +310,6 @@ def search_builder(listingType='Sale',
                  'direction': 'Ascending'}
         }
     
-
-
     # Build the search parameters with the locations
     SearchParameters = []
     SearchQueue = queue.Queue()
@@ -311,7 +319,7 @@ def search_builder(listingType='Sale',
         SearchQueue.put(searchFrom.copy())
 
     
-    # The price range can be adusted later, to reduce the number of listings returned (max 1000 per search)
+    # The price range can be adjusted later, to reduce the number of listings returned (max 1000 per search)
     ''' 
     The choice to make the price adjustments later is because, when there is a list of locations, 
     the price ranges neccessary will depend on the number of locations included. If only one location 
@@ -347,6 +355,7 @@ def build_search_locations(suburbs=['Balgowlah']):
     if set(suburbs).issubset(['All', 'NSW', 'QLD', 'SA', 'NT', 'ACT', 'WA', 'TAS']):
         suburbs = postcodes['Suburb']
 
+    # buld the locations with additional parameters
     searchLocations = {}
     for suburb in suburbs:
         location_df = postcodes[postcodes['Suburb'] == suburb]
@@ -364,6 +373,10 @@ def build_search_locations(suburbs=['Balgowlah']):
 
 
 def extract_price(lastPrice):
+    """
+    Extract the value of the price
+    """
+    
     price = 0
     priceDetails = lastPrice.replace('$','').replace(',','').replace('+','').replace('s','').split()
     for item in priceDetails:
@@ -375,48 +388,43 @@ def extract_price(lastPrice):
 
 
 def add_dates(listings, df):
-
+    """
+    Add the first and last seen dates to the dataframe
+    """
 
     listing_df = json_normalize(listings)
-    # check if listing_df ids are already in df
-    # the ones that are, update the last seen
-    # the ones that aren't create first seen and last seen
 
     if df.shape[0] > 0:
         new_listings = listing_df['listing.id']
         mask = df['listing.id'].isin(new_listings)
-        # update the dates already in df
+        # Update the dates already in df
         df['last_seen'].loc[mask] = datetime.utcnow().date().strftime('%d/%m/%Y')
     
-  
-    #existing_listing = df['listing.id'].unique()
-    #mask = listing_df['listing.id'].isin(existing_listing)
     listing_df['first_seen'] = datetime.utcnow().date().strftime('%d/%m/%Y')
     listing_df['last_seen'] = datetime.utcnow().date().strftime('%d/%m/%Y')
-    #listing_df = listing_df[~mask]
-
-
-
-    #Need to change 'date' to 'last seen'
-    #df[mask]['last_seen'] = datetime.utcnow().date()
-
+    
     listing_df = df.append(listing_df)
-    #sort the listings by date, so the last one is most recent
+    
+    # Sort the listings by date, so the last one is most recent
     listing_df = listing_df.sort_values(by=['last_seen'])
     listing_df = listing_df.drop_duplicates(subset='listing.id') # keep the last one
 
     return listing_df
 
 
-if __name__ == '__main__':
+def calling_function(client_id=None, client_secret=None, filename=None, suburbs=[]):
 
-    
     client_id = credentials['client_id']
     client_secret = credentials['client_secret']
+    
+    suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
+    #suburbs = ['NSW']
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
        
     # Read the realestate file, if it exists
-    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),'local_listings.csv')
+    file = 'local_listings.csv'
+    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
+
     try:
         df = pd.read_csv(filename, sep=',')
         df.drop(['Unnamed: 0'], axis=1, inplace=True)
@@ -429,21 +437,21 @@ if __name__ == '__main__':
     maxPages = 5
     #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
 
-    suburbs = ['Balgowlah', 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
-    #suburbs = ['NSW']
 
+    # Build the first item for the serach queue
     locations = build_search_locations(suburbs)
     searchParameters, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
                                  minPrice=None, maxPrice=None, locations=locations, page=1, pageSize=200)
     # Todo: Sale response gets different keys, but maybe the property id is the same. So 
     # the property id can be used to check for sold price
-    # Todo: Add dates and track when all listing were initially seen and last seen.
 
     listings = []
     length = -1
 
     while searchQueue.qsize() > 0:
         print(f'Searching queue {searchQueue.qsize()}...')
+
+        # Get the first item from the search queue
         search = searchQueue.get()
         access_token, search_results, remaining_calls = search_domain(access_token, search)
         listings.extend(search_results)
@@ -455,12 +463,18 @@ if __name__ == '__main__':
         while new_listings and search['page'] < maxPages:
             print (f'page: {search["page"]}')
             listings.extend(new_listings)
+
+            # Add the next page of search results
             search['page'] += 1
             access_token, new_listings, remaining_calls = search_domain(access_token, search)
  
+        # Add the last page of search results
         listings.extend(new_listings)
     
+
         if ((len(new_listings) > 0) & (search['page'] >= maxPages)):
+            # Update the search parameters when the maximum page count has been reached.
+            # This uses the last price as the mimumum price in the next search criterea
             lastPrice = new_listings[-1]['listing']['priceDetails']['displayPrice']
             new_minPrice = extract_price(lastPrice)
             search['minPrice'] = new_minPrice
@@ -473,11 +487,37 @@ if __name__ == '__main__':
             listing_df.to_csv(filename)
 
     # Update the dates and save to file
-    listing_df =  add_dates(listings, df)
+    listing_df = add_dates(listings, df)
+    listing_df = listing_df[listing_df['type'] != 'Project']
+
+    # Find prices where there is none.
+    id_list = listing_df[(listing_df['listing.priceDetails.price'].isnull()) & 
+                         (listing_df['listing.priceDetails.displayPrice'].isnull())]
+    for idx, id in id_list.iterrows():
+        min_price, max_price, middle_price = find_price_range(access_token, id['listing.id'], 500000, 2000000, 25000)
+        listing_df['listing.priceDetails.displayPrice'].iloc[idx] = middle_price
+        
+
+
     listing_df.to_csv(filename)
+
+if __name__ == '__main__':
+    # Todo: set up initialisation for new calling function
+    # Some properties will be sold after a while, the price search may not work in this case....
+    #    set a maximum before breaking out
+
+
+    #client_id = credentials['client_id']
+    #client_secret = credentials['client_secret']
+
+    #file = 'local_listings.csv
+    #filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
     
+    #suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
+    ##suburbs = ['NSW']
+
+    #parameters = {'listingType': 'Sale', 'minBeds': 2, 'maxBeds':2, 'minPrice':None, 'maxPrice':None}
 
 
-
-
+    calling_function()
 
