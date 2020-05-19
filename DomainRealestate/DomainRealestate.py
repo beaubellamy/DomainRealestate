@@ -262,61 +262,56 @@ def search_domain(token, search_parameters):
     
 
 
-def search_builder(listingType='Sale',
-                   minBeds=None, maxBeds=None,
-                   minBath=None, maxBath=None,
-                   minPrice=None, maxPrice=None, 
-                   locations={}, 
-                   keywords=[],
-                   page=1, pageSize=200):
+def search_builder(searchForm):
     """
     Build the search parameters list.
     """
     
-    assert listingType in ['Sale', 'Rent', 'Share', 'Sold', 'NewHomes'], \
-        'listingType must be on ene of [Sale, Rent, Share, Sold, NewHomes]'
+    assert searchForm['listingType'] in ['Sale', 'Rent', 'Share', 'Sold', 'NewHomes'], \
+        'listingType must be one of [Sale, Rent, Share, Sold, NewHomes]'
     
     # Prepare the search parameters
-    searchFrom = {
-        'listingType': listingType,
-        #'propertyTypes': None,
-        #'propertyFeatures': None,
-        #'listingAttributes': None,
-        'minBedrooms': minBeds,
-        'maxBedrooms': maxBeds,
-        'minBathrooms': minBath,
-        'maxBathrooms': maxBath,
-        #'minCarspaces': None,
-        #'maxCarspaces': None,
-        'minPrice': minPrice,
-        'maxPrice': maxPrice,
-        #'minLandArea': None,
-        #'maxLandArea': None,
-        #'advertiserIds': None,
-        #'adIds': None,
-        #'excludeAdIds': None,
-        'locations': locations,
-        #'locationTerms': None,
-        'keywords': keywords,
-        #'inspectionFrom': None,
-        #'inspectionTo': None,
-        #'auctionFrom': None,
-        #'auctionTo': None,
-        #'sort': None,
-        'page': page,
-        'pageSize': pageSize,
-        #'geoWindow':None
-        'sort': {'sortKey': 'Price',
-                 'direction': 'Ascending'}
-        }
+    #searchForm = {
+    #    'listingType': listingType,
+    #    #'propertyTypes': None,
+    #    #'propertyFeatures': None,
+    #    #'listingAttributes': None,
+    #    'minBedrooms': minBeds,
+    #    'maxBedrooms': maxBeds,
+    #    'minBathrooms': minBath,
+    #    'maxBathrooms': maxBath,
+    #    #'minCarspaces': None,
+    #    #'maxCarspaces': None,
+    #    'minPrice': minPrice,
+    #    'maxPrice': maxPrice,
+    #    #'minLandArea': None,
+    #    #'maxLandArea': None,
+    #    #'advertiserIds': None,
+    #    #'adIds': None,
+    #    #'excludeAdIds': None,
+    #    'locations': locations,
+    #    #'locationTerms': None,
+    #    'keywords': keywords,
+    #    #'inspectionFrom': None,
+    #    #'inspectionTo': None,
+    #    #'auctionFrom': None,
+    #    #'auctionTo': None,
+    #    #'sort': None,
+    #    'page': page,
+    #    'pageSize': pageSize,
+    #    #'geoWindow':None
+    #    'sort': {'sortKey': 'Price',
+    #             'direction': 'Ascending'}
+    #    }
     
     # Build the search parameters with the locations
+    locations = searchForm['locations']
     SearchParameters = []
     SearchQueue = queue.Queue()
     for suburb in locations.keys():
-        searchFrom['locations'] = [locations[suburb]]
-        SearchParameters.append(searchFrom.copy())
-        SearchQueue.put(searchFrom.copy())
+        searchForm['locations'] = [locations[suburb]]
+        SearchParameters.append(searchForm.copy())
+        SearchQueue.put(searchForm.copy())
 
     
     # The price range can be adjusted later, to reduce the number of listings returned (max 1000 per search)
@@ -409,21 +404,43 @@ def add_dates(listings, df):
     listing_df = listing_df.sort_values(by=['last_seen'])
     listing_df = listing_df.drop_duplicates(subset='listing.id') # keep the last one
 
+    listing_df = function(listing_df)
+
     return listing_df
 
 
-def calling_function(client_id=None, client_secret=None, filename=None, suburbs=[]):
+def function(listing_df):
 
-    client_id = credentials['client_id']
-    client_secret = credentials['client_secret']
+    # Todo: Make sure all listings have a real price
+    # extract prices where available.
+    # identify listings with no price and use price range function
     
-    suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
+    ## Find prices where there is none.
+    #id_list = listing_df[(listing_df['listing.priceDetails.price'].isnull()) & 
+    #                     (listing_df['listing.priceDetails.displayPrice'].isnull())]
+    #for idx, row in id_list.iterrows():
+    #    min_price, max_price, middle_price = find_price_range(access_token, row['listing.id'], 500000, 2000000, 25000)
+    #    listing_df['listing.priceDetails.displayPrice'].iloc[idx] = middle_price
+    #
+    return listing_df
+
+
+def calling_function(client_id=None, client_secret=None, filename=None, suburbs=[], searchForm={}):
+    
+    #client_id = credentials['client_id']
+    #client_secret = credentials['client_secret']
+    
+    #suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
     #suburbs = ['NSW']
     access_token = get_access_token(client_id=client_id, client_secret=client_secret)
-       
+
+    # Limits of the post request enforced by Domain.com.au
+    #maxPageSize = 200
+    maxPages = 5
+
     # Read the realestate file, if it exists
-    file = 'local_listings.csv'
-    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
+    #file = 'local_listings.csv'
+    #filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
 
     try:
         df = pd.read_csv(filename, sep=',')
@@ -432,19 +449,9 @@ def calling_function(client_id=None, client_secret=None, filename=None, suburbs=
     except FileNotFoundError:
         df = pd.DataFrame()
 
-    # Limits of the post request enforced by Domain.com.au
-    maxPageSize = 200
-    maxPages = 5
-    #find_price_range(access_token, '132223042', 600000, 1200000, 5000)
-
-
-    # Build the first item for the serach queue
-    locations = build_search_locations(suburbs)
-    searchParameters, searchQueue = search_builder(listingType='Sale', minBeds=None, maxBeds=None, minBath=None, maxBath=None, 
-                                 minPrice=None, maxPrice=None, locations=locations, page=1, pageSize=200)
-    # Todo: Sale response gets different keys, but maybe the property id is the same. So 
-    # the property id can be used to check for sold price
-
+    # Build search paramters
+    searchParameters, searchQueue = search_builder(searchForm)
+    
     listings = []
     length = -1
 
@@ -490,34 +497,65 @@ def calling_function(client_id=None, client_secret=None, filename=None, suburbs=
     listing_df = add_dates(listings, df)
     listing_df = listing_df[listing_df['type'] != 'Project']
 
-    # Find prices where there is none.
-    id_list = listing_df[(listing_df['listing.priceDetails.price'].isnull()) & 
-                         (listing_df['listing.priceDetails.displayPrice'].isnull())]
-    for idx, id in id_list.iterrows():
-        min_price, max_price, middle_price = find_price_range(access_token, id['listing.id'], 500000, 2000000, 25000)
-        listing_df['listing.priceDetails.displayPrice'].iloc[idx] = middle_price
-        
-
+    # find missing prices where available.
 
     listing_df.to_csv(filename)
 
 if __name__ == '__main__':
+
     # Todo: set up initialisation for new calling function
     # Some properties will be sold after a while, the price search may not work in this case....
     #    set a maximum before breaking out
 
 
-    #client_id = credentials['client_id']
-    #client_secret = credentials['client_secret']
+    client_id = credentials['client_id']
+    client_secret = credentials['client_secret']
 
-    #file = 'local_listings.csv
-    #filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
+    file = 'local_listings.csv'
+    filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
     
-    #suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
+    suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
     ##suburbs = ['NSW']
 
-    #parameters = {'listingType': 'Sale', 'minBeds': 2, 'maxBeds':2, 'minPrice':None, 'maxPrice':None}
+    # Limits of the post request enforced by Domain.com.au
+    maxPages = 5
 
+    # Build the first item for the serach queue
+    locations = build_search_locations(suburbs)
+    page=1
+    pageSize=200
+    searchForm = {
+        'listingType': 'Sale',
+        #'propertyTypes': None,
+        #'propertyFeatures': None,
+        #'listingAttributes': None,
+        'minBedrooms': None,
+        'maxBedrooms': None,
+        'minBathrooms': None,
+        'maxBathrooms': None,
+        #'minCarspaces': None,
+        #'maxCarspaces': None,
+        'minPrice': None,
+        'maxPrice': None,
+        #'minLandArea': None,
+        #'maxLandArea': None,
+        #'advertiserIds': None,
+        #'adIds': None,
+        #'excludeAdIds': None,
+        'locations': locations,
+        #'locationTerms': None,
+        'keywords': [],
+        #'inspectionFrom': None,
+        #'inspectionTo': None,
+        #'auctionFrom': None,
+        #'auctionTo': None,
+        #'sort': None,
+        'page': page,
+        'pageSize': pageSize,
+        #'geoWindow':None
+        'sort': {'sortKey': 'Price',
+                 'direction': 'Ascending'}
+        }
 
-    calling_function()
+    calling_function(client_id=client_id, client_secret=client_secret, filename=filename, suburbs=suburbs, searchForm=searchForm)
 
