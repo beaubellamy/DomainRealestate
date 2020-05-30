@@ -8,16 +8,21 @@ import time
 from datetime import datetime, timedelta
 import queue
 from credentials import credentials
+from extract_prices import listing_prices
+
 
 '''
 Code has been developed based of this post:
 https://medium.com/@alexdambra/how-to-get-aussie-property-price-guides-using-python-the-domain-api-afe871efac96
 ''' 
 
-def get_access_token(client_id=None, client_secret=None):
+def get_access_token(credentials={}):
     """
     Get the access token for the project.
     """
+    client_id = credentials['client_id']
+    client_secret = credentials['client_secret']
+
     if client_id == None or client_secret == None:
         return None
 
@@ -39,6 +44,77 @@ def get_access_token(client_id=None, client_secret=None):
     return access_token
 
 
+def validate_post_request(request,  headers, post_payload, credentials):
+
+    request = requests.post(url,headers=headers, json=post_payload)
+    
+    token=request.json()
+
+    # check for status.
+    if request.status_code == 429:
+        # Rate limit has been reached.
+        retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
+        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        print (f'Will re-try at approx {retry_time}.')
+        print (f'Access token expires at {token["expire_at"]}')
+
+        time.sleep(float(request.headers['Retry-After'])*1.01)
+        print (access_token)
+
+        # Get a new token
+        token = get_access_token(client_id=credentials['client_id'], client_secret=credentials['client_secret'])
+        access_token = token['access_token']
+
+        auth = {"Authorization":"Bearer "+access_token}
+        request = requests.post(url, json=post_payload, headers=auth)
+        print (token['access_token'])
+
+        if request.status_code != 200:
+            raise Exception(request.json()['errors'], request.json()['message'], 
+                            'Raised after getting a new access token')
+
+    return request
+
+
+def validate_get_request(url, headers, credentials):
+
+    request = requests.get(url,headers=headers)
+    
+    # check for status.
+    if request.status_code == 429:
+        # Rate limit has been reached.
+        retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
+        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        print (f'Will re-try at approx {retry_time}.')
+        print (f'Access token expires at {token["expire_at"]}')
+
+        time.sleep(float(request.headers['Retry-After'])*1.01)
+        #print (access_token)
+
+        # Get a new token
+        token = get_access_token(client_id=credentials['client_id'], client_secret=credentials['client_secret'])
+        access_token = token['access_token']
+
+        auth = {"Authorization":"Bearer "+access_token}
+        request = requests.get(url,headers=headers)
+        
+        if request.status_code != 200:
+            raise Exception(request.json()['errors'], request.json()['message'], 
+                            'Raised after getting a new access token')
+
+    return request
+
+def remaining_calls(request):
+
+    if 'X-RateLimit-Remaining' in request.headers.keys():
+        remaining = request.headers['X-RateLimit-Remaining']
+    elif 'X-Quota-PerDay-Remaining' in request.headers.keys():
+        remaining = request.headers['X-Quota-PerDay-Remaining']
+    else:
+        remaining = -1
+
+    return remaining
+
 def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
     """
     Find the price range of a property listing
@@ -51,14 +127,18 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     # Get the property details
     url = "https://api.domain.com.au/v1/listings/"+str(int(property_id))
     auth = {"Authorization":"Bearer "+token['access_token']}
-    request = requests.get(url,headers=auth)
+    request = validate_get_request(url, auth, credentials)
+    #request = requests.get(url,headers=auth)
+
     details=request.json()
 
     if details['status'] == 'sold':
         date = details['saleDetails']['soldDetails']['soldDate']
         price = details['saleDetails']['soldDetails']['soldPrice']
 
-        return price, price, price
+        remaining = remaining_calls(request)
+
+        return int(remaining), date, price, price
 
     # Get the property details
     address=details['addressParts']
@@ -73,12 +153,9 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
 
     # The below puts all relevant property types into a single string. eg. a property listing 
     # can be a 'house' and a 'townhouse'
-    n=0
-    property_type_str=""
-    for p in details['propertyTypes']:
-        property_type_str=property_type_str+(details['propertyTypes'][int(n)])
-        n=n+1
-    print(property_type_str)  
+    #property_type_str=""
+    #for p in details['propertyTypes']:
+    #    property_type_str=property_type_str+(p)
 
     max_price=lowerBoundPrice
     searching_for_price=True
@@ -108,7 +185,8 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
           ]
         }
 
-        request = requests.post(url,headers=auth,json=post_fields)
+        #request = requests.post(url,headers=auth,json=post_fields)
+        request = validate_post_request(request,  post_fields, credentials)
 
         l=request.json()
         listings = []
@@ -159,7 +237,8 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
             }
           ]
         }
-        request = requests.post(url,headers=auth,json=post_fields)
+        
+        request = validate_post_request(request,  auth, post_fields, credentials)
 
         listing_request=request.json()
         listings = []
@@ -183,18 +262,18 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     # Print the results
     print(address['displayAddress'])
     print(details['headline'])
-    print("Property Type:",property_type_str)
+    print("Property Type:",details['propertyTypes'])
     print("Details: ",int(bedrooms),"bedroom,",int(bathrooms),"bathroom,",int(carspaces),"carspace")
     print("Display price:",details['priceDetails']['displayPrice'])      
     if max_price==min_price:
-        print("Price guide:","$",lower)
+        print(f'Price guide: ${min_price}')
     else:
-        print("Price range:","$",lower,"-","$",upper)
+        print(f'Price range: ${min_price} - ${max_price}')
     print("URL:",details['seoUrl'])
 
-    middle_price = min_price + (max_price-min_price)/2
+    remaining = remaining_calls(request)
 
-    return min_price, max_price, middle_price
+    return int(remaining), None, min_price, max_price
 
 
 def search_domain(token, search_parameters):
@@ -403,9 +482,7 @@ def add_dates(listings, df):
     # Sort the listings by date, so the last one is most recent
     listing_df = listing_df.sort_values(by=['last_seen'])
     listing_df = listing_df.drop_duplicates(subset='listing.id') # keep the last one
-
-    listing_df = function(listing_df)
-
+    
     return listing_df
 
 
@@ -414,7 +491,21 @@ def function(listing_df):
     # Todo: Make sure all listings have a real price
     # extract prices where available.
     # identify listings with no price and use price range function
+    listing_df['listing.priceDetails.displayPrice'] = listing_df['listing.priceDetails.displayPrice'].fillna('none')
+    null_price = listing_df['listing.priceDetails.price'].isnull()
+
+    # Get the ones that are just numbers
+    display_is_number = listing_df['listing.priceDetails.displayPrice'].str.isdigit()
+    listing_df.loc[(null_price & display_is_number), 'listing.priceDetails.price'] = listing_df[null_price & display_is_number]['listing.priceDetails.displayPrice']
+
+    # filter the dataframe that have numbers in the display price
     
+
+    # extract the price
+
+    print (f'{test.shape}')
+
+
     ## Find prices where there is none.
     #id_list = listing_df[(listing_df['listing.priceDetails.price'].isnull()) & 
     #                     (listing_df['listing.priceDetails.displayPrice'].isnull())]
@@ -425,23 +516,15 @@ def function(listing_df):
     return listing_df
 
 
-def calling_function(client_id=None, client_secret=None, filename=None, suburbs=[], searchForm={}):
+def Domain(filename=None, searchForm={}):
     
-    #client_id = credentials['client_id']
-    #client_secret = credentials['client_secret']
-    
-    #suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
-    #suburbs = ['NSW']
-    access_token = get_access_token(client_id=client_id, client_secret=client_secret)
+
+    access_token = get_access_token(credentials)
 
     # Limits of the post request enforced by Domain.com.au
-    #maxPageSize = 200
     maxPages = 5
 
     # Read the realestate file, if it exists
-    #file = 'local_listings.csv'
-    #filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
-
     try:
         df = pd.read_csv(filename, sep=',')
         df.drop(['Unnamed: 0'], axis=1, inplace=True)
@@ -460,12 +543,12 @@ def calling_function(client_id=None, client_secret=None, filename=None, suburbs=
 
         # Get the first item from the search queue
         search = searchQueue.get()
-        access_token, search_results, remaining_calls = search_domain(access_token, search)
+        access_token, search_results, remaining = search_domain(access_token, search)
         listings.extend(search_results)
      
         # Check if new listings can be added
         search['page'] += 1 
-        access_token, new_listings, remaining_calls = search_domain(access_token, search)
+        access_token, new_listings, remaining = search_domain(access_token, search)
 
         while new_listings and search['page'] < maxPages:
             print (f'page: {search["page"]}')
@@ -473,12 +556,11 @@ def calling_function(client_id=None, client_secret=None, filename=None, suburbs=
 
             # Add the next page of search results
             search['page'] += 1
-            access_token, new_listings, remaining_calls = search_domain(access_token, search)
+            access_token, new_listings, remaining = search_domain(access_token, search)
  
         # Add the last page of search results
         listings.extend(new_listings)
     
-
         if ((len(new_listings) > 0) & (search['page'] >= maxPages)):
             # Update the search parameters when the maximum page count has been reached.
             # This uses the last price as the mimumum price in the next search criterea
@@ -488,30 +570,30 @@ def calling_function(client_id=None, client_secret=None, filename=None, suburbs=
             search['page'] = 1
             searchQueue.put(search.copy())
 
-        if remaining_calls <= 5:
+        if remaining <= 5:
             # Update the dates and save to file if we are getting close to the call limit
-            listing_df =  add_dates(listings, df)
+            listing_df = add_dates(listings, df)
             listing_df.to_csv(filename)
 
     # Update the dates and save to file
     listing_df = add_dates(listings, df)
     listing_df = listing_df[listing_df['type'] != 'Project']
 
-    # find missing prices where available.
-
+    print (f'You have {remaining} api calls left.')
     listing_df.to_csv(filename)
 
-if __name__ == '__main__':
+    return access_token, listing_df
 
+def setup(file):
+    
     # Todo: set up initialisation for new calling function
     # Some properties will be sold after a while, the price search may not work in this case....
     #    set a maximum before breaking out
 
+    #client_id = credentials['client_id']
+    #client_secret = credentials['client_secret']
 
-    client_id = credentials['client_id']
-    client_secret = credentials['client_secret']
-
-    file = 'local_listings.csv'
+    
     filename = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..'),file)
     
     suburbs = ['Balgowlah'] #, 'Manly Vale', 'Dee Why', 'Brookvale', 'Cremorne']
@@ -557,5 +639,43 @@ if __name__ == '__main__':
                  'direction': 'Ascending'}
         }
 
-    calling_function(client_id=client_id, client_secret=client_secret, filename=filename, suburbs=suburbs, searchForm=searchForm)
+    return filename, searchForm
+
+    #Domain(filename=filename, suburbs=suburbs, searchForm=searchForm)
+
+
+if __name__ == '__main__':
+
+
+    file = 'local_listings.csv'
+    filename, searchForm = setup(file)
+
+    access_token, df = Domain(filename=filename, searchForm=searchForm)
+    access_token = get_access_token(credentials)
+
+    ## extract the prices in tom something usefull
+    df = listing_prices(filename)
+    #df['Sold Date'] = None
+
+    # find prices by calling the search api
+    # Find prices where there is none.
+    id_list = df[(df['fromPrice'].isnull()) | (df['fromPrice'].isnull())]
+    for idx, row in id_list.iterrows():
+        remaining, date, min_price, max_price = find_price_range(access_token, row['listing.id'], 500000, 2000000, 25000)
+        
+        df['displayPrice'].iloc[idx] = 'price search'
+        df['fromPrice'].iloc[idx] = min_price
+        df['toPrice'].iloc[idx] = max_price
+
+        if date is not None:
+            df['Sold Date'] = date
+
+        # Update the file before we run out of api calls.
+        if remaining < 100:
+            df.to_csv(filename)
+
+    missing_prices = df[(df['fromPrice'].isnull()) | (df['fromPrice'].isnull())].shape[0]
+    print (f'There are {missing_prices} listings that are missing price information.')
+
+    
 

@@ -262,3 +262,9 @@ __pycache__/
 
 /test.csv
 /local.csv
+/.ipynb_checkpoints/find_price_testing-checkpoint.ipynb
+/DomainRealestate/.ipynb_checkpoints
+/DomainRealestate/local_listings-update.csv
+/price extraction.csv
+/local_listings2.csv
+/local_listings-update.csv
