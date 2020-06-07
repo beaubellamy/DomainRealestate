@@ -44,25 +44,26 @@ def get_access_token(credentials={}):
     return access_token
 
 
-def validate_post_request(request,  headers, post_payload, credentials):
+def validate_post_request(url,  headers, post_payload, credentials):
 
-    request = requests.post(url,headers=headers, json=post_payload)
+    request = requests.post(url, headers=headers, json=post_payload)
     
-    token=request.json()
+    #token=request.json()
 
     # check for status.
     if request.status_code == 429:
         # Rate limit has been reached.
         retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
-        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        quota = quota_limit(request)
+        print (f'Limit of {quota} has been reached.')
         print (f'Will re-try at approx {retry_time}.')
-        print (f'Access token expires at {token["expire_at"]}')
+        #print (f'Access token expires at {token["expire_at"]}')
 
         time.sleep(float(request.headers['Retry-After'])*1.01)
         print (access_token)
 
         # Get a new token
-        token = get_access_token(client_id=credentials['client_id'], client_secret=credentials['client_secret'])
+        token = get_access_token(credentials)
         access_token = token['access_token']
 
         auth = {"Authorization":"Bearer "+access_token}
@@ -84,15 +85,16 @@ def validate_get_request(url, headers, credentials):
     if request.status_code == 429:
         # Rate limit has been reached.
         retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
-        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        quota = quota_limit(request)
+        print (f'Limit of {quota} has been reached.')
         print (f'Will re-try at approx {retry_time}.')
-        print (f'Access token expires at {token["expire_at"]}')
+        #print (f'Access token expires at {token["expire_at"]}')
 
         time.sleep(float(request.headers['Retry-After'])*1.01)
         #print (access_token)
 
         # Get a new token
-        token = get_access_token(client_id=credentials['client_id'], client_secret=credentials['client_secret'])
+        token = get_access_token(credentials)
         access_token = token['access_token']
 
         auth = {"Authorization":"Bearer "+access_token}
@@ -115,6 +117,131 @@ def remaining_calls(request):
 
     return remaining
 
+
+def quota_limit(request):
+
+    if 'x-ratelimit-vcallrate' in request.headers.keys():
+        quota = request.headers['x-ratelimit-vcallrate']
+    elif 'X-Quota-PerDay-Limit' in request.headers.keys():
+        quota = request.headers['X-Quota-PerDay-Limit']
+    else:
+        quota = -1
+
+    return quota
+
+
+def check_for_listing(request, property_id, price, increment, increase_price=True):
+
+    continue_searching = True
+
+    if increase_price == True:
+        prefix = 'Lower'
+        search_prefix = 'increasing'
+    else:
+        prefix = 'Upper'
+        search_prefix = 'decreasing'
+
+    listing_request=request.json()
+    listings = []
+    for listing in listing_request:
+        listings.append(listing["listing"]["id"])
+        
+    if increase_price == True:
+        if int(property_id) in listings:
+            print(f"{prefix} bound found: ", price)
+            #min_price=min_price-increment
+            continue_searching=False
+        else:
+            price=price+increment
+    else:
+        if int(property_id) not in listings:
+            price+=increment
+            print(f"{prefix} bound found: ", price)
+            #min_price=min_price-increment
+            continue_searching=False
+        else:
+            price=price-increment
+        
+    if continue_searching:
+        print(f"Not found. {search_prefix} price to {price}")
+    
+    time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly   
+
+    return continue_searching, price
+
+def search_for_price(property_fields, auth, request, increment):
+    #property_fields = {'price': min_price, 
+    #                   'property_type': property_type, 
+    #                   'bedrooms': bedrooms, 
+    #                   'bathrooms': bathrooms, 
+    #                   'suburb': suburb, 
+    #                   'postcode': postcode}
+
+    price = property_fields['price']
+
+    url = "https://api.domain.com.au/v1/listings/residential/_search" # Set destination URL here
+        
+    while searching_for_price:
+    
+        post_fields = build_post_fields(property_fields)
+        
+        #request = requests.post(url,headers=auth,json=post_fields)
+        request = validate_post_request(url, auth, post_fields, credentials)
+
+        searching_for_price, min_price = check_for_listing(request, property_id, min_price, increment, True)
+        #listing_request=request.json()
+        #listings = []
+        #for listing in listing_request:
+        #    listings.append(listing["listing"]["id"])
+        
+        #if int(property_id) in listings:
+        #    print("Lower bound found: ", min_price)
+        #    #min_price=min_price-increment
+        #    searching_for_price=False
+        #else:
+        #    min_price=min_price+increment
+        #    print("Not found. Increasing max price to ",min_price)
+        #    time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly   
+
+        if min_price >= UpperBoundPrice:
+            upper = 2
+            break
+
+    #searching_for_price=True
+    if UpperBoundPrice>0:
+        max_price=UpperBoundPrice
+    else:  
+        max_price=min_price+400000  
+
+    return max_price
+
+
+def build_post_fields(property_fields):
+        
+    post_fields ={
+        "listingType":"Sale",
+        "maxPrice":property_fields['price'],
+        "pageSize":100,
+        "propertyTypes":property_fields['propertyTypes'],
+        "minBedrooms":property_fields['bedrooms'],
+        "maxBedrooms":property_fields['bedrooms'],
+        "minBathrooms":property_fields['bathrooms'],
+        "maxBathrooms":property_fields['bathrooms'],
+        "locations":[
+        {
+            "state":"",
+            "region":"",
+            "area":"",
+            "suburb":property_fields['suburb'],
+            "postCode":property_fields['postcode'],
+            "includeSurroundingSuburbs":False
+        }
+        ]
+    }
+
+    return post_fields
+
+
 def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, increment):
     """
     Find the price range of a property listing
@@ -122,6 +249,8 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     property_id: The unique property id at the end of the url 
     """
    
+    
+
     # Function prints the property details and whether each price guess has the property listed.
 
     # Get the property details
@@ -146,10 +275,9 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     suburb=address['suburb']
     bathrooms=details['bathrooms']
     bedrooms=details['bedrooms']
-    carspaces=details['carspaces']
     property_type=details['propertyTypes']
     print(f'Property: {property_type} \nAddress: {suburb}, {postcode} \n'
-          f'Bedrooms:{str(bedrooms)}, \nBathrooms:{str(bathrooms)},  \nCarspace:{str(carspaces)}')
+          f'Bedrooms:{str(bedrooms)}, \nBathrooms:{str(bathrooms)}')
 
     # The below puts all relevant property types into a single string. eg. a property listing 
     # can be a 'house' and a 'townhouse'
@@ -157,105 +285,53 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     #for p in details['propertyTypes']:
     #    property_type_str=property_type_str+(p)
 
-    max_price=lowerBoundPrice
-    searching_for_price=True
+    min_price=lowerBoundPrice
+    continue_searching=True
+    details['postcode'] = address['postcode']
+    details['suburb'] = address['suburb']
 
     # Start your loop
-    while searching_for_price:
-    
-        url = "https://api.domain.com.au/v1/listings/residential/_search" # Set destination URL here
-        post_fields ={
-          "listingType":"Sale",
-            "maxPrice":max_price,
-            "pageSize":100,
-          "propertyTypes":property_type,
-          "minBedrooms":bedrooms,
-            "maxBedrooms":bedrooms,
-          "minBathrooms":bathrooms,
-            "maxBathrooms":bathrooms,
-          "locations":[
-            {
-              "state":"",
-              "region":"",
-              "area":"",
-              "suburb":suburb,
-              "postCode":postcode,
-              "includeSurroundingSuburbs":False
-            }
-          ]
-        }
-
-        #request = requests.post(url,headers=auth,json=post_fields)
-        request = validate_post_request(request,  post_fields, credentials)
-
-        l=request.json()
-        listings = []
-        for listing in l:
-            listings.append(listing["listing"]["id"])
+    while continue_searching:
         
+        details['price'] = min_price
 
-        if int(property_id) in listings:
-            max_price=max_price-increment
-            print("Lower bound found: ", max_price)
-            searching_for_price=False
-        else:
-            max_price=max_price+increment
-            print("Not found. Increasing max price to ",max_price)
-            time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly   
+        url = "https://api.domain.com.au/v1/listings/residential/_search" # Set destination URL here
+        post_fields = build_post_fields(details)
+        
+        #request = requests.post(url,headers=auth,json=post_fields)
+        request = validate_post_request(url, auth, post_fields, credentials)
 
-        if max_price >= UpperBoundPrice:
+        continue_searching, min_price = check_for_listing(request, property_id, min_price, increment, True)
+               
+        if min_price >= UpperBoundPrice:
             upper = 2
             break
 
-    searching_for_price=True
+    continue_searching=True
     if UpperBoundPrice>0:
-        min_price=UpperBoundPrice
+        max_price=UpperBoundPrice
     else:  
-        min_price=max_price+400000  
+        max_price=min_price+400000  
 
 
-    while searching_for_price:
+    while continue_searching:
     
+        details['price'] = max_price
+
         url = "https://api.domain.com.au/v1/listings/residential/_search" # Set destination URL here
-        post_fields ={
-          "listingType":"Sale",
-            "minPrice":min_price,
-            "pageSize":100,
-          "propertyTypes":property_type,
-          "minBedrooms":bedrooms,
-            "maxBedrooms":bedrooms,
-          "minBathrooms":bathrooms,
-            "maxBathrooms":bathrooms,
-          "locations":[
-            {
-              "state":"",
-              "region":"",
-              "area":"",
-              "suburb":suburb,
-              "postCode":postcode,
-              "includeSurroundingSuburbs":False
-            }
-          ]
-        }
-        
-        request = validate_post_request(request,  auth, post_fields, credentials)
+        post_fields = build_post_fields(details)
+                
+        request = validate_post_request(url,  auth, post_fields, credentials)
 
-        listing_request=request.json()
-        listings = []
-        for listing in listing_request:
-            listings.append(listing["listing"]["id"])
-        listings
+        continue_searching, max_price = check_for_listing(request, property_id, max_price, increment, False)
 
-        if int(property_id) in listings:
-            min_price=min_price+increment
-            print("Upper bound found: ", min_price)
-            searching_for_price=False
-        else:
-            min_price=min_price-increment
-            print("Not found. Decreasing min price to ",min_price)
-            time.sleep(0.1)  # sleep a bit so you don't make too many API calls too quickly     
-       
-        if min_price <= lowerBoundPrice:
+        # If the maximum price is greater than the upper bound, the real price was not
+        # found. Increase the upper bound and continue searching
+        if not continue_searching and max_price >= UpperBoundPrice:
+            UpperBoundPrice *= 2
+            max_price = UpperBoundPrice
+
+        if max_price <= lowerBoundPrice:
             lower = 1
             break
     
@@ -263,9 +339,9 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
     print(address['displayAddress'])
     print(details['headline'])
     print("Property Type:",details['propertyTypes'])
-    print("Details: ",int(bedrooms),"bedroom,",int(bathrooms),"bathroom,",int(carspaces),"carspace")
+    print("Details: ",int(bedrooms),"bedroom,",int(bathrooms),"bathroom")
     print("Display price:",details['priceDetails']['displayPrice'])      
-    if max_price==min_price:
+    if min_price==max_price:
         print(f'Price guide: ${min_price}')
     else:
         print(f'Price range: ${min_price} - ${max_price}')
@@ -285,7 +361,7 @@ def search_domain(token, search_parameters):
 
     url = "https://api.domain.com.au/v1/listings/residential/_search"
     if datetime.now() > token['expire_at']:
-        token = get_access_token(client_id=client_id, client_secret=client_secret)
+        token = get_access_token(credentials)
         access_token = token['access_token']
     
     auth = {"Authorization":"Bearer "+access_token}
@@ -314,7 +390,8 @@ def search_domain(token, search_parameters):
     if request.status_code == 429:
         # Rate limit has been reached.
         retry_time = datetime.now() + timedelta(seconds=float(request.headers["Retry-After"]))
-        print (f'Limit of {request.headers["X-RateLimit-VCallRate"]} has been reached.')
+        quota = quota_limit(request)
+        print (f'Limit of {quota} has been reached.')
         print (f'Will re-try at approx {retry_time}.')
         print (f'Access token expires at {token["expire_at"]}')
 
@@ -322,7 +399,7 @@ def search_domain(token, search_parameters):
         print (access_token)
 
         # Get a new token
-        token = get_access_token(client_id=client_id, client_secret=client_secret)
+        token = get_access_token(credentials)
         access_token = token['access_token']
 
         auth = {"Authorization":"Bearer "+access_token}
@@ -337,7 +414,9 @@ def search_domain(token, search_parameters):
         # status code: 500
         raise Exception(request.json()['errors'], request.json()['message'])
 
-    return token, request.json(), int(request.headers['X-RateLimit-Remaining'])
+    remaining = remaining_calls(request)
+
+    return token, request.json(), int(remaining)
     
 
 
@@ -348,40 +427,6 @@ def search_builder(searchForm):
     
     assert searchForm['listingType'] in ['Sale', 'Rent', 'Share', 'Sold', 'NewHomes'], \
         'listingType must be one of [Sale, Rent, Share, Sold, NewHomes]'
-    
-    # Prepare the search parameters
-    #searchForm = {
-    #    'listingType': listingType,
-    #    #'propertyTypes': None,
-    #    #'propertyFeatures': None,
-    #    #'listingAttributes': None,
-    #    'minBedrooms': minBeds,
-    #    'maxBedrooms': maxBeds,
-    #    'minBathrooms': minBath,
-    #    'maxBathrooms': maxBath,
-    #    #'minCarspaces': None,
-    #    #'maxCarspaces': None,
-    #    'minPrice': minPrice,
-    #    'maxPrice': maxPrice,
-    #    #'minLandArea': None,
-    #    #'maxLandArea': None,
-    #    #'advertiserIds': None,
-    #    #'adIds': None,
-    #    #'excludeAdIds': None,
-    #    'locations': locations,
-    #    #'locationTerms': None,
-    #    'keywords': keywords,
-    #    #'inspectionFrom': None,
-    #    #'inspectionTo': None,
-    #    #'auctionFrom': None,
-    #    #'auctionTo': None,
-    #    #'sort': None,
-    #    'page': page,
-    #    'pageSize': pageSize,
-    #    #'geoWindow':None
-    #    'sort': {'sortKey': 'Price',
-    #             'direction': 'Ascending'}
-    #    }
     
     # Build the search parameters with the locations
     locations = searchForm['locations']
@@ -650,28 +695,31 @@ if __name__ == '__main__':
     file = 'local_listings.csv'
     filename, searchForm = setup(file)
 
-    access_token, df = Domain(filename=filename, searchForm=searchForm)
-    access_token = get_access_token(credentials)
+    #access_token, df = Domain(filename=filename, searchForm=searchForm)
+    access_token = get_access_token(credentials) # only required when not calling Domain
 
     ## extract the prices in tom something usefull
     df = listing_prices(filename)
     #df['Sold Date'] = None
-
+    
     # find prices by calling the search api
     # Find prices where there is none.
-    id_list = df[(df['fromPrice'].isnull()) | (df['fromPrice'].isnull())]
+    id_list = df[(df['fromPrice'].isnull()) | (df['toPrice'].isnull())]
     for idx, row in id_list.iterrows():
+     
         remaining, date, min_price, max_price = find_price_range(access_token, row['listing.id'], 500000, 2000000, 25000)
-        
-        df['displayPrice'].iloc[idx] = 'price search'
-        df['fromPrice'].iloc[idx] = min_price
-        df['toPrice'].iloc[idx] = max_price
+
+        df.loc[idx, 'listing.priceDetails.price'] = 'price search'
+        df.loc[idx, 'listing.priceDetails.priceFrom'] = min_price
+        df.loc[idx, 'fromPrice'] = min_price
+        df.loc[idx, 'listing.priceDetails.priceTo'] = max_price
+        df.loc[idx, 'toPrice'] = max_price
 
         if date is not None:
-            df['Sold Date'] = date
+            df.loc[idx, 'Sold Date'] = date
 
         # Update the file before we run out of api calls.
-        if remaining < 100:
+        if remaining < 500:
             df.to_csv(filename)
 
     missing_prices = df[(df['fromPrice'].isnull()) | (df['fromPrice'].isnull())].shape[0]

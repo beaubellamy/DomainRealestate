@@ -39,7 +39,7 @@ def extend_numbers(df, pattern, delimiter=' '):
 
     df['alt'] = df['listing.priceDetails.displayPrice'].str.findall(pattern, flags=re.IGNORECASE)    
 
-    if sum(df['alt'].isnull()) == 0:
+    if sum(df['alt'].str[0].isnull()) == df.shape[0]:
         df.drop(['alt'], axis=1, inplace=True)
         return df
 
