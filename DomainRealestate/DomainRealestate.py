@@ -303,15 +303,21 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
 
         continue_searching, min_price = check_for_listing(request, property_id, min_price, increment, True)
                
-        if min_price >= UpperBoundPrice:
-            upper = 2
-            break
+        #if continue_searching and min_price == UpperBoundPrice:
+        #    UpperBoundPrice *= 2
+        #    print ('stop')
+
+        #if min_price >= UpperBoundPrice:
+        #    upper = 2
+        #    break
 
     continue_searching=True
-    if UpperBoundPrice>0:
-        max_price=UpperBoundPrice
-    else:  
-        max_price=min_price+400000  
+    UpperBoundPrice = min_price*1.2
+    max_price = UpperBoundPrice
+    #if UpperBoundPrice>0:
+    #    max_price=UpperBoundPrice
+    #else:  
+    #    max_price=min_price+400000  
 
 
     while continue_searching:
@@ -329,11 +335,12 @@ def find_price_range(token, property_id, lowerBoundPrice, UpperBoundPrice, incre
         # found. Increase the upper bound and continue searching
         if not continue_searching and max_price >= UpperBoundPrice:
             UpperBoundPrice *= 2
-            max_price = UpperBoundPrice
+            #max_price = UpperBoundPrice
+            continue_searching = True
 
-        if max_price <= lowerBoundPrice:
-            lower = 1
-            break
+        #if max_price <= lowerBoundPrice:
+        #    lower = 1
+        #    break
     
     # Print the results
     print(address['displayAddress'])
@@ -719,7 +726,7 @@ if __name__ == '__main__':
             df.loc[idx, 'Sold Date'] = date
 
         # Update the file before we run out of api calls.
-        if remaining < 500:
+        if remaining < 100:
             df.to_csv(filename)
 
     missing_prices = df[(df['fromPrice'].isnull()) | (df['fromPrice'].isnull())].shape[0]
